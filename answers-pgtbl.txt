@@ -1,0 +1,3 @@
+System fstat & stat can be speed up by this way.
+Because it just get some information from kernel,
+so we can cache it in user space.

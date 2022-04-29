@@ -80,7 +80,20 @@ sys_sleep(void)
 int
 sys_pgaccess(void)
 {
-  // lab pgtbl: your code here.
+  uint64 base, mask;
+  int len;
+  if(argaddr(0, &base) < 0)
+    return -1;
+  if(argint(1, &len) < 0)
+    return -1;
+  if(argaddr(2, &mask) < 0)
+    return -1;
+  printf("%d %d %d\n", base, len, mask);
+  if(len > (sizeof(int) * 8)) return -1;
+  int imask;
+  pgaccess(base, len, &imask);
+  if(copyout(myproc()->pagetable, mask, (char *)&imask, sizeof(int)) < 0)
+    return -1;
   return 0;
 }
 #endif
