@@ -127,6 +127,12 @@ found:
     return 0;
   }
 
+  if((p->alarmframe = (struct trapframe *)kalloc()) == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+  
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -134,6 +140,8 @@ found:
     release(&p->lock);
     return 0;
   }
+
+  p->ticks = 0;
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -153,6 +161,9 @@ freeproc(struct proc *p)
   if(p->trapframe)
     kfree((void*)p->trapframe);
   p->trapframe = 0;
+  if(p->alarmframe)
+    kfree((void*)p->alarmframe);
+  p->alarmframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
   p->pagetable = 0;
@@ -164,6 +175,7 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->ticks = 0;
 }
 
 // Create a user page table for a given process,
@@ -653,4 +665,23 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+void
+alarm(void)
+{
+  struct proc *p = myproc();
+  if(p->ticks == 0) {
+    return;
+  }
+  acquire(&p->lock);
+  if(p->left_ticks <= 0 && !p->is_deal) {
+    p->is_deal = 1;
+    *p->alarmframe = *p->trapframe;
+    p->trapframe->epc = p->cb;
+    p->left_ticks = p->ticks;
+  } else {
+    --p->left_ticks;
+  }
+  release(&p->lock);
 }

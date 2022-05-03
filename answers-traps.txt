@@ -1,0 +1,50 @@
+1. Which registers contain arguments to functions? 
+   For example, which register holds 13 in main's 
+   call to printf?
+A: pass arguments by a0, a1, a2;
+   a0 is the address of format string "%d %d\n"
+   a1 is second argument which is 11 (compute in compiling)
+   a2 is third argument which is 13
+   in risc-v, pass arguments by a0 - a7(same as armv8),
+   and more than 8 arguments store in memory(stack)
+
+2. Where is the call to function f in the assembly code 
+   for main? Where is the call to g? 
+   (Hint: the compiler may inline functions.)
+A: It's compute in compiling, so there isn't have any 
+   function call in main function.
+
+3. At what address is the function printf located?
+A: 0x630. It can be known as "jalr    1536(ra)".
+   because "auipc   ra,0x0" in  0x30 <main+20>,
+   so ra is 0x30, 
+   "jalr    1536(ra)" show as 
+   step 1: $ra + 1536
+   step 2: ra = pc + 4
+   we can get the answer is 0x630.
+
+4. What value is in the register ra just after the 
+   jalr to printf in main?
+A: ra is 0x38. in "jalr    1536(ra)",
+   ra = pc + 4.
+
+5. What is the output? If the RISC-V were instead big-endian 
+   what would you set i to in order to yield the same output? 
+   Would you need to change 57616 to a different value?
+A: Output is "HE110 World".
+   57616 is 0x0000e110, so "%x" format as "e110",
+   "%s" format a int to byte, so it needs to think about
+   big-endian or little-endian.
+   RISC-V is little-endian, so i will be store as:
+   "72 6c 64 00" in ASCII is "rld\0", "00" can see as 
+   the end of string.
+   ---
+   In big-endian, i = 0x726c6400;
+   ---
+   don't need to change 57616.
+
+6. In the following code, what is going to be printed after 'y='? 
+   Why does this happen?
+A: The answer is "x=3 y=1", because register a2 
+   ought to saved by caller, but main function don't save it, 
+   vprintf change a2 to 1.
