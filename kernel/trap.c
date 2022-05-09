@@ -67,6 +67,12 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 15) {
+    if (handle_cow(r_stval()) > 0) {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+      p->killed = 1;
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -218,3 +224,46 @@ devintr()
   }
 }
 
+int handle_cow(uint64 va) {
+  pte_t *pte;
+  uint64 old_pa;
+  uint flags;
+  struct proc *p = myproc();
+  if (va >= p->sz) {
+    return 1;
+  }
+  if((pte = walk(p->pagetable, va, 0)) == 0)
+    panic("handle_cow(walk): pte should exist");
+  if (!(*pte & PTE_COW) || !(*pte & PTE_V)) {
+    // if in trap, kill it;
+    return 1;
+  }
+  flags = PTE_FLAGS(*pte);
+  va = PGROUNDDOWN(va);
+  old_pa = PTE2PA(*pte);
+  
+  uint64 new_pa = old_pa;
+  int last_page = is_last_page(old_pa);
+  if (!last_page) {
+    new_pa = (uint64)kalloc();
+    if (new_pa == 0) {
+      printf("kalloc fail!\n");
+      p->killed = 1;
+      return -1;
+    }
+    // must copy memory in first
+    memmove((char*)new_pa, (char*)old_pa, PGSIZE);
+    uvmunmap(p->pagetable, va, 1, 1);
+  } else {
+    uvmunmap(p->pagetable, va, 1, 0);
+  }
+
+  flags |= PTE_W;
+  flags &= ~PTE_COW;
+  if(mappages(p->pagetable, va, PGSIZE, (uint64)new_pa, flags) != 0){
+    printf("mappages fail!\n");
+    p->killed = 1;
+    return -2;
+  }
+  return 0;
+}

@@ -9,6 +9,11 @@
 #include "riscv.h"
 #include "defs.h"
 
+#define INDEX_MAX (PHYSTOP - KERNBASE) / PGSIZE
+#define PA2INDEX(pa) (pa - KERNBASE) / PGSIZE
+
+int page_cnt[INDEX_MAX];
+
 void freerange(void *pa_start, void *pa_end);
 
 extern char end[]; // first address after kernel.
@@ -27,6 +32,7 @@ void
 kinit()
 {
   initlock(&kmem.lock, "kmem");
+  memset(page_cnt, 0, sizeof(page_cnt));
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -51,14 +57,15 @@ kfree(void *pa)
   if(((uint64)pa % PGSIZE) != 0 || (char*)pa < end || (uint64)pa >= PHYSTOP)
     panic("kfree");
 
-  // Fill with junk to catch dangling refs.
-  memset(pa, 1, PGSIZE);
-
-  r = (struct run*)pa;
-
   acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
+  if (--page_cnt[PA2INDEX((uint64)pa)] <= 0) {
+    // Fill with junk to catch dangling refs.
+    memset(pa, 1, PGSIZE);
+
+    r = (struct run*)pa;
+    r->next = kmem.freelist;
+    kmem.freelist = r;
+  }
   release(&kmem.lock);
 }
 
@@ -72,11 +79,32 @@ kalloc(void)
 
   acquire(&kmem.lock);
   r = kmem.freelist;
-  if(r)
+  if(r) {
     kmem.freelist = r->next;
+    // printf("index: %x %x\n", PA2INDEX((uint64)r), (uint64)r);
+    page_cnt[PA2INDEX((uint64)r)] = 1;
+  }
   release(&kmem.lock);
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void increase_page_cnt(uint64 pa) 
+{
+  acquire(&kmem.lock);
+  ++page_cnt[PA2INDEX(pa)];
+  release(&kmem.lock);
+}
+
+uint64 is_last_page(uint64 pa)
+{
+  acquire(&kmem.lock);
+  if (page_cnt[PA2INDEX(pa)] <= 1) {
+    release(&kmem.lock);
+    return pa;
+  }
+  release(&kmem.lock);
+  return 0;
 }
