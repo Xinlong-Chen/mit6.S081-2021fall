@@ -1,0 +1,9 @@
+1. thread_switch needs to save/restore only the callee-save registers. Why?
+   C语言函数调用会自动保存caller-save寄存器。
+
+2. Why are there missing keys with 2 threads, but not with 1 thread?
+   放置key的过程属于临界区，一个线程临界区没有意义。
+   序列：
+    thread A               thread A
+    e->value = value;
+                           e->value = value;
