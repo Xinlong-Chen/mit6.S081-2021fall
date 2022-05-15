@@ -10,9 +10,12 @@
 #include "defs.h"
 
 void freerange(void *pa_start, void *pa_end);
+void steal(int to);
 
 extern char end[]; // first address after kernel.
                    // defined by kernel.ld.
+
+#define STEAL_NUM 32
 
 struct run {
   struct run *next;
@@ -21,12 +24,26 @@ struct run {
 struct {
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+} kmem[NCPU];
 
 void
 kinit()
 {
-  initlock(&kmem.lock, "kmem");
+  if (NCPU <= 0) {
+    panic("NCPU must larger than 0");
+  }
+
+  char* lock = "kmem";
+  int n = NCPU, lock_name_size = strlen(lock) + 1;
+  while (n /= 10) lock_name_size++;
+  char lock_name[lock_name_size];
+
+  for (int i = 0; i < NCPU; ++i) {
+    snprintf(lock_name, lock_name_size, "%s%d",lock, i);
+    initlock(&kmem[i].lock, lock_name);
+    kmem[i].freelist = 0;
+  }
+
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -54,12 +71,16 @@ kfree(void *pa)
   // Fill with junk to catch dangling refs.
   memset(pa, 1, PGSIZE);
 
-  r = (struct run*)pa;
+  push_off();
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  int cid = cpuid();
+  r = (struct run*)pa;
+  acquire(&kmem[cid].lock);
+  r->next = kmem[cid].freelist;
+  kmem[cid].freelist = r;
+  release(&kmem[cid].lock);
+
+  pop_off();
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -70,13 +91,45 @@ kalloc(void)
 {
   struct run *r;
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  push_off();
+  
+  int cid = cpuid();
+  acquire(&kmem[cid].lock);
+  if(kmem[cid].freelist == 0) steal(cid);
+  
+  r = kmem[cid].freelist; 
+  if(r) {
+    kmem[cid].freelist = r->next;
+  }
+  release(&kmem[cid].lock);
+
+  pop_off();
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+void steal(int to)
+{
+  struct run *r;
+  int num = STEAL_NUM;
+  for (int i = 0; i < NCPU; ++i) {
+    if (i == to) continue;
+    acquire(&kmem[i].lock);
+
+    r = kmem[i].freelist;
+    while (r && num--) {
+      kmem[i].freelist = r->next;
+      r->next = kmem[to].freelist;
+      kmem[to].freelist = r;
+      r = kmem[i].freelist;
+    }
+    if (num <= 0) {
+      release(&kmem[i].lock);
+      return;
+    }
+    release(&kmem[i].lock);
+  }
+  // printf("cannot steal enough page!\n");
 }
