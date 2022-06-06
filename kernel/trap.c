@@ -5,6 +5,10 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sleeplock.h"
+#include "fs.h"
+#include "fcntl.h"
+#include "file.h"
 
 struct spinlock tickslock;
 uint ticks;
@@ -15,6 +19,8 @@ extern char trampoline[], uservec[], userret[];
 void kernelvec();
 
 extern int devintr();
+
+int handle_page_fault(uint64 va);
 
 void
 trapinit(void)
@@ -67,6 +73,11 @@ usertrap(void)
     syscall();
   } else if((which_dev = devintr()) != 0){
     // ok
+  } else if (r_scause() == 15 || r_scause() == 13) {
+    if (handle_page_fault(r_stval()) > 0) {
+      printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
+      printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
+    }
   } else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
@@ -218,3 +229,51 @@ devintr()
   }
 }
 
+int handle_page_fault(uint64 va) {
+  uint64 pa;
+  uint64 flags;
+  struct vma *pvma;
+  struct proc *p = myproc();
+  if (va >= p->sz) {
+    p->killed = 1;
+    return 1;
+  }
+
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].vaild && 
+        p->vmas[i].addr <= va && va < p->vmas[i].addr + p->vmas[i].len) {
+      // allocate physical memory
+      pa = (uint64)kalloc();
+      if (pa == 0) {
+        printf("kalloc fail!\n");
+        p->killed = 1;
+        return -1;
+      }
+      memset((char*)pa, 0, PGSIZE);
+
+      // read data from file, write it to page
+      pvma = &p->vmas[i];
+      va = PGROUNDDOWN(va);
+      ilock(pvma->f->ip);
+      readi(pvma->f->ip, 0, pa, va - pvma->addr, PGSIZE); // maybe less than one page
+      iunlock(pvma->f->ip);
+
+      // map address in user space
+      flags = PTE_U;
+      if (pvma->prot & PROT_READ)  flags |= PTE_R;
+      if (pvma->prot & PROT_WRITE) flags |= PTE_W;
+      if (pvma->prot & PROT_EXEC)  flags |= PTE_X;
+      if (mappages(p->pagetable, va, PGSIZE, (uint64)pa, flags) != 0) {
+        printf("mappages fail!\n");
+        kfree((void*)pa);
+        p->killed = 1;
+        return -2;
+      }
+
+      return 0;
+    }
+  }
+
+  p->killed = 1;
+  return 2;
+}

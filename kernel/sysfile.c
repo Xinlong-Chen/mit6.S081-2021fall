@@ -484,3 +484,84 @@ sys_pipe(void)
   }
   return 0;
 }
+
+#define min(a, b) ((a) < (b) ? (a) : (b))
+#define max(a, b) ((a) > (b) ? (a) : (b))
+
+uint64
+sys_mmap(void)
+{
+  // void *mmap(void *addr, size_t length, int prot, int flags,
+  //          int fd, off_t offset);
+  uint64 addr;
+  int length, prot, flags;
+  struct file *f;
+
+  // assume addr and offset is zero
+  if (argint(1, &length) < 0 || argint(2, &prot) < 0 ||
+      argint(3, &flags) < 0)
+    return -1;
+  if (argfd(4, 0, &f) < 0)
+    return -1;
+
+  if (f->writable == 0 && prot & PROT_WRITE && !(flags & MAP_PRIVATE))
+    return -1;
+  struct proc *p = myproc();
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].vaild == 0) { // have slot
+      p->vmas[i].f = filedup(f);
+      p->vmas[i].addr = addr = p->sz;
+      p->vmas[i].len = length;
+      p->vmas[i].prot = prot;
+      p->vmas[i].flags = flags;
+      p->vmas[i].vaild = 1;
+
+      // lazy allocate
+      p->sz += length;
+      return addr;
+    }
+  }
+  return -1;
+}
+
+uint64
+sys_munmap(void)
+{
+  // munmap(addr, length) 
+  uint64 addr;
+  int length;
+  if (argaddr(0, &addr) || argint(1, &length) < 0)
+    return -1;
+
+  if (length == 0)
+    return -1;
+
+  struct proc* p = myproc();
+  int i = 0;
+  for (i = 0; i < NVMA; i++) {
+    if (p->vmas[i].addr <= addr && addr + length <= p->vmas[i].addr + p->vmas[i].len) {
+      break;
+    }
+  }
+  if (i == NVMA) {
+    return -1;
+  }
+
+  if (p->vmas[i].flags & MAP_SHARED) { 
+    filewrite(p->vmas[i].f, addr, length);
+  }
+
+  if (p->vmas[i].addr == addr && p->vmas[i].len == length) {
+    uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+    fileclose(p->vmas[i].f);
+    p->vmas[i].vaild = 0;
+  } else if (p->vmas[i].addr == addr) {
+    uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+    p->vmas[i].addr += length;
+    p->vmas[i].len  -= length;
+  } else if (p->vmas[i].addr + p->vmas[i].len == addr + length) {
+    uvmunmap(p->pagetable, addr, length / PGSIZE, 1);
+    p->vmas[i].len  -= length;
+  }
+  return 0;
+}

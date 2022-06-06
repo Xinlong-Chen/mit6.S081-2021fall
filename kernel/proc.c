@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -53,6 +54,9 @@ procinit(void)
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
       p->kstack = KSTACK((int) (p - proc));
+      for (int i = 0; i < NVMA; i++) {
+        p->vmas[i].vaild = 0;
+      }
   }
 }
 
@@ -164,6 +168,9 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  for (int i = 0; i < NVMA; i++)
+    p->vmas[i].vaild = 0;
 }
 
 // Create a user page table for a given process,
@@ -301,6 +308,18 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  for (i = 0; i < NVMA; i++) {
+    np->vmas[i].vaild = 0;
+    if (p->vmas[i].vaild) {
+      np->vmas[i].addr  = p->vmas[i].addr;
+      np->vmas[i].flags = p->vmas[i].flags;
+      np->vmas[i].prot  = p->vmas[i].prot;
+      np->vmas[i].len   = p->vmas[i].len;
+      np->vmas[i].f = filedup(p->vmas[i].f);
+      np->vmas[i].vaild = 1;
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -350,6 +369,17 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  for (int i = 0; i < NVMA; i++) {
+    if (p->vmas[i].vaild) {
+      if (p->vmas[i].flags & MAP_SHARED) { 
+        filewrite(p->vmas[i].f, p->vmas[i].addr, p->vmas[i].len);
+        uvmunmap(p->pagetable, p->vmas[i].addr, p->vmas[i].len / PGSIZE, 1);
+        fileclose(p->vmas[i].f);
+        p->vmas[i].vaild = 0;
+      }
     }
   }
 
