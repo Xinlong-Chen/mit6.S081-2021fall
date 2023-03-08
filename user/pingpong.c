@@ -19,7 +19,9 @@ main(int argc, char *argv[])
     write(p[1], "c", 1);
     exit(0);
   } else { // father
+    sleep(1);
     write(p[1], "c", 1);
+    sleep(1);
     read(p[0], buf, 1);
     fprintf(1, "%d: received pong\n", getpid());
   }
